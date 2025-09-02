@@ -38,9 +38,9 @@ abstract class AnkiSyncService : LifecycleService() {
         private const val CHANNEL_ID = "long_operation_channel"
         
         // Intent actions
-        const val ACTION_START_OPERATION = "fr.berliat.hskwidget.START_OPERATION"
-        const val ACTION_CANCEL_OPERATION = "fr.berliat.hskwidget.CANCEL_OPERATION"
-        const val ACTION_STOP_SERVICE = "fr.berliat.hskwidget.STOP_SERVICE"
+        const val ACTION_START_OPERATION = "fr.berliat.ankidroidhelper.START_OPERATION"
+        const val ACTION_CANCEL_OPERATION = "fr.berliat.ankidroidhelper.CANCEL_OPERATION"
+        const val ACTION_STOP_SERVICE = "fr.berliat.ankidroidhelper.STOP_SERVICE"
 
         // Intent extras
         const val EXTRA_OPERATION_TYPE = "operation_type"
