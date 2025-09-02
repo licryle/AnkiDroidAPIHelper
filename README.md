@@ -11,7 +11,7 @@ AnkiDroidAPIHelper handles for you:
 - Checking that AnkiDroid is installed
 - Checking for the Read/Write permissions
 - Securing the permissions from the user on Read/Write to AnkiDroid
-- Ensures Anki is running/can be run in the background or simply starts it
+- Ensures Anki is running/can be run in the background or simply starts it. Note: China OEM like to disable background launch, hence the "is running". Read https://github.com/ankidroid/Anki-Android/issues/18286 for more details.
 - Run the operation in a IO thread loop, or even run a service for longer operations (like a long import)
 
 ## How to use?
