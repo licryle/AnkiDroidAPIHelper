@@ -20,6 +20,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.reflect.KClass
 
 /**
  * AnkiDelegate is your easiest way to store things into Anki. This implementation is
@@ -48,7 +49,7 @@ import kotlinx.coroutines.withContext
 typealias AnkiDelegator = suspend ((suspend () -> Result<Unit>)?) -> Unit
 
 open class AnkiDelegate(
-    private val fragment: Fragment
+    private val fragment: Fragment, private val callbackHandler: HandlerInterface?
 ) {
 
     interface HandlerInterface {
@@ -63,7 +64,6 @@ open class AnkiDelegate(
 
     private val lifecycleOwner : LifecycleOwner = fragment
     private val context = fragment.requireContext()
-    private val callbackHandler = fragment as? HandlerInterface
     private val callQueue: ArrayDeque<suspend () -> Result<Unit>> = ArrayDeque()
     private lateinit var permissionLauncher: ActivityResultLauncher<Array<String>>
 
@@ -74,6 +74,14 @@ open class AnkiDelegate(
 
     suspend fun delegateToAnki(ankiAction: (suspend () -> Result<Unit>)?) {
         ankiAction?.let { AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiAction(it)) }
+    }
+
+    suspend fun delegateToAnki(serviceClass: KClass<out AnkiSyncService>) {
+        delegateToAnki(suspend {
+            val serviceDelegate = AnkiSyncServiceDelegate(context, serviceClass.java)
+            serviceDelegate.startSyncToAnkiOperation()
+            serviceDelegate.awaitOperationCompletion()
+        })
     }
 
     /********** Anki Permissions ************/
