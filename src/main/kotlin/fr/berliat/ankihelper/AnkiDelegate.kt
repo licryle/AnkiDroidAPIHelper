@@ -72,11 +72,11 @@ open class AnkiDelegate(
         observeUiEvents()
     }
 
-    suspend fun delegateToAnki(ankiAction: (suspend () -> Result<Unit>)?) {
+    suspend fun delegateToAnki(ankiAction: (suspend () -> Result<Unit>)?) = withContext(Dispatchers.IO) {
         ankiAction?.let { AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiAction(it)) }
     }
 
-    suspend fun delegateToAnki(serviceClass: KClass<out AnkiSyncService>) {
+    suspend fun delegateToAnki(serviceClass: KClass<out AnkiSyncService>) = withContext(Dispatchers.IO) {
         delegateToAnki(suspend {
             val serviceDelegate = AnkiSyncServiceDelegate(context, serviceClass.java)
             serviceDelegate.startSyncToAnkiOperation()

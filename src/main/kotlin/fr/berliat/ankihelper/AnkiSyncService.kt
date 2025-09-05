@@ -170,7 +170,7 @@ abstract class AnkiSyncService : LifecycleService() {
         clearNotification()
     }
     
-    protected suspend fun updateProgress(current: Int, errors: Int, total: Int, message: String) {
+    protected fun updateProgress(current: Int, errors: Int, total: Int, message: String) {
         _operationState.value = OperationState.Running(
             operationType = (_operationState.value as? OperationState.Running)?.operationType
                 ?: "",
