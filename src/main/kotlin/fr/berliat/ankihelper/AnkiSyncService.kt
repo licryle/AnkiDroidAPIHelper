@@ -155,7 +155,7 @@ abstract class AnkiSyncService : LifecycleService() {
                 _operationState.value = OperationState.Error(e.message ?: "Unknown error")
             } finally {
                 clearNotification()
-                stopForeground(true)
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 _operationState.value = OperationState.Idle // Awaiting a new activation or destruction
             }
         }
@@ -164,7 +164,7 @@ abstract class AnkiSyncService : LifecycleService() {
     private fun cancelCurrentOperation() {
         currentJob?.cancel()
         currentJob = null
-        stopForeground(true)
+        stopForeground(STOP_FOREGROUND_REMOVE)
         _operationState.value = OperationState.Cancelled
         _operationState.value = OperationState.Idle
         clearNotification()
