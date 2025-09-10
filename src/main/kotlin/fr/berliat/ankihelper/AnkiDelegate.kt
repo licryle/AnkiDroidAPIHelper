@@ -1,7 +1,6 @@
 package fr.berliat.ankidroidhelper
 
 import android.content.ActivityNotFoundException
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
@@ -53,6 +52,7 @@ open class AnkiDelegate(
 ) {
 
     interface HandlerInterface {
+        fun onAnkiNotInstalled()
         fun onAnkiOperationSuccess()
         fun onAnkiOperationCancelled()
         fun onAnkiOperationFailed(e: Throwable)
@@ -64,6 +64,7 @@ open class AnkiDelegate(
 
     private val lifecycleOwner : LifecycleOwner = fragment
     private val context = fragment.requireContext()
+    private val appContext = context.applicationContext
     private val callQueue: ArrayDeque<suspend () -> Result<Unit>> = ArrayDeque()
     private lateinit var permissionLauncher: ActivityResultLauncher<Array<String>>
 
@@ -114,6 +115,7 @@ open class AnkiDelegate(
             }
         } else {
             callbackHandler?.onAnkiRequestPermissionDenied()
+            callbackHandler?.onAnkiOperationFailed(AnkiOperationsFailures.AnkiFailure_NoPermission)
         }
     }
 
@@ -148,7 +150,6 @@ open class AnkiDelegate(
                 AnkiSharedEventBus.uiEvents.collect { event ->
                     // Launching on the activity to enable to finish so matter the fragment in the background.
                     fragment.requireActivity().lifecycleScope.launch(Dispatchers.Main) {
-                        val appContext = fragment.activity?.applicationContext
                         when (event) {
                             is AnkiSharedEventBus.UiEvent.AnkiAction -> {
                                 val result = safelyModifyAnkiDbIfAllowed {
@@ -163,12 +164,13 @@ open class AnkiDelegate(
                                     }
                                 }
 
-                                result.onSuccess { onAnkiOperationSuccess(appContext) }
-                                    .onFailure { e ->
+                                // Null if result is deferred
+                                result?.onSuccess { onAnkiOperationSuccess() }
+                                    ?.onFailure { e ->
                                         if (e is CancellationException)
-                                            onAnkiOperationCancelled(appContext)
+                                            onAnkiOperationCancelled()
                                         else
-                                            onAnkiOperationFailed(appContext, e)
+                                            onAnkiOperationFailed(e)
                                     }
                             }
                             is AnkiSharedEventBus.UiEvent.AnkiServiceProgress -> {
@@ -176,19 +178,19 @@ open class AnkiDelegate(
                                 Log.d(TAG, "Progress update: ${event.state.progress}/${event.state.total} - ${event.state.message}")
 
                                 // Forward progress to registered callback
-                                onAnkiSyncProgress(appContext, event)
+                                onAnkiSyncProgress(event)
                             }
                             is AnkiSharedEventBus.UiEvent.AnkiServiceStarting -> {
-                                onAnkiServiceStarting(appContext, event.serviceDelegate)
+                                onAnkiServiceStarting(event.serviceDelegate)
                             }
                             is AnkiSharedEventBus.UiEvent.AnkiServiceCancelled -> {
-                                onAnkiOperationCancelled(appContext)
+                                onAnkiOperationCancelled()
                             }
                             is AnkiSharedEventBus.UiEvent.AnkiServiceError -> {
-                                onAnkiOperationFailed(appContext, Exception(event.state.message))
+                                onAnkiOperationFailed(Exception(event.state.message))
                             }
                             is AnkiSharedEventBus.UiEvent.AnkiServiceCompleted -> {
-                                onAnkiOperationSuccess(appContext)
+                                onAnkiOperationSuccess()
                             }
                         }
                     }
@@ -204,77 +206,62 @@ open class AnkiDelegate(
         }
     }
 
-    protected open suspend fun safelyModifyAnkiDbIfAllowed(ankiDbAction: suspend () -> Result<Unit>): Result<Unit> {
+    protected open suspend fun safelyModifyAnkiDbIfAllowed(ankiDbAction: suspend () -> Result<Unit>): Result<Unit>?
+        = withContext(Dispatchers.Main) {
         if (!isApiAvailable()) {
             onAnkiNotInstalled()
-            return Result.failure(AnkiOperationsFailures.AnkiFailure_NotInstalled)
+
+            return@withContext Result.failure(AnkiOperationsFailures.AnkiFailure_NotInstalled)
         }
 
         if (shouldRequestPermission()) {
             callQueue.add(ankiDbAction)
             requestPermission()
-            return Result.failure(AnkiOperationsFailures.AnkiFailure_Deferred)
+            return@withContext null
         }
 
-        return safelyModifyAnkiDb(ankiDbAction)
+        return@withContext safelyModifyAnkiDb(ankiDbAction)
     }
 
-    protected fun appContextToast(context: Context?, message: String) {
-        if (context == null) {
-            return
-        }
-
+    protected fun appContextToast(message: String) {
         Toast.makeText(
-            context,
+            appContext,
             message,
             Toast.LENGTH_LONG
         ).show()
     }
 
     /*********** CallBacks ***********/
-    protected open fun onAnkiOperationFailed(context: Context?, e: Throwable) {
-        if (e is AnkiOperationsFailures.AnkiFailure_Deferred
-            || e is AnkiOperationsFailures.AnkiFailure_Off
-            || context == null
-        )
-            return
-
+    protected open fun onAnkiOperationFailed(e: Throwable) {
         callbackHandler?.onAnkiOperationFailed(e)
     }
 
-    protected open fun onAnkiServiceStarting(context: Context?, serviceDelegate: AnkiSyncServiceDelegate) {
-        if (context == null) return
-
+    protected open fun onAnkiServiceStarting(serviceDelegate: AnkiSyncServiceDelegate) {
         callbackHandler?.onAnkiServiceStarting(serviceDelegate)
     }
 
-    protected open fun onAnkiSyncProgress(context: Context?, event: AnkiSharedEventBus.UiEvent.AnkiServiceProgress) {
-        if (context == null) return
-
+    protected open fun onAnkiSyncProgress(event: AnkiSharedEventBus.UiEvent.AnkiServiceProgress) {
         // The service does the notification update
-
         callbackHandler?.onAnkiSyncProgress(event.state.progress, event.state.total, event.state.message)
     }
 
-    protected open fun onAnkiOperationSuccess(context: Context?) {
-        if (context == null) return
-
+    protected open fun onAnkiOperationSuccess() {
         callbackHandler?.onAnkiOperationSuccess()
     }
 
-    protected open fun onAnkiOperationCancelled(context: Context?) {
-        if (context == null) return
-
+    protected open fun onAnkiOperationCancelled() {
         callbackHandler?.onAnkiOperationCancelled()
     }
 
     protected open fun onAnkiNotInstalled() {
+        callbackHandler?.onAnkiNotInstalled()
     }
 
-    sealed class AnkiOperationsFailures: Throwable() {
-        object AnkiFailure_Deferred : AnkiOperationsFailures()
-        object AnkiFailure_NotInstalled : AnkiOperationsFailures()
-        object AnkiFailure_Off : AnkiOperationsFailures()
+    sealed class AnkiOperationsFailures(message: String): Throwable(message) {
+        object AnkiFailure_NotInstalled : AnkiOperationsFailures("AnkiNotInstalled")
+        object AnkiFailure_NoPermission : AnkiOperationsFailures("AnkiNoPermission")
+
+        open class CustomError(message: String) : AnkiOperationsFailures(message)
     }
 
     companion object {
