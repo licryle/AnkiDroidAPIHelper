@@ -278,6 +278,6 @@ open class AnkiDelegate(
     }
 
     companion object {
-        const val TAG = "AnkiDelegate"
+        private const val TAG = "AnkiDelegate"
     }
 }
