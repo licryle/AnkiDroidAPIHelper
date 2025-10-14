@@ -6,14 +6,13 @@ import kotlinx.coroutines.flow.SharedFlow
 
 object AnkiSharedEventBus {
     private val _uiEvents = MutableSharedFlow<UiEvent>(
-        replay = 0,
+        replay = 2,
         extraBufferCapacity = 10,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     val uiEvents: SharedFlow<UiEvent> = _uiEvents
 
     sealed class UiEvent {
-        data class AnkiAction(val action: suspend () -> Result<Unit>) : UiEvent()
         data class AnkiServiceStarting(val serviceDelegate: AnkiSyncServiceDelegate) : UiEvent()
         data class AnkiServiceProgress(val state: AnkiSyncService.OperationState.Running) : UiEvent()
         data class AnkiServiceCancelled(val state: AnkiSyncService.OperationState.Cancelled) : UiEvent()
