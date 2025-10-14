@@ -7,15 +7,15 @@ import android.content.ServiceConnection
 import android.os.IBinder
 import android.util.Log
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.takeWhile
 
 import fr.berliat.ankidroidhelper.AnkiSyncService.OperationState
 
@@ -56,10 +56,6 @@ class AnkiSyncServiceDelegate(
         }
     }
 
-    init {
-        observeOperationState()
-    }
-
     /**
      * Start a sync to Anki operation
      */
@@ -71,6 +67,11 @@ class AnkiSyncServiceDelegate(
 
         context.startForegroundService(intent) // or startService if not foreground
         bindService()
+
+        ProcessLifecycleOwner.get().lifecycleScope.launch {
+            AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiServiceStarting(this@AnkiSyncServiceDelegate))
+        }
+
         Log.d(TAG, "Started sync to Anki operation")
     }
     
@@ -89,6 +90,8 @@ class AnkiSyncServiceDelegate(
         
         context.startService(intent)
         Log.d(TAG, "Cancelled current operation")
+
+        cleanup()
     }
     
     /**
@@ -104,18 +107,41 @@ class AnkiSyncServiceDelegate(
     suspend fun awaitOperationCompletion(): Result<Unit> {
         val service = serviceDeferred.await() // suspend until service is connected
 
-        val state = service.operationState
-                .filterNotNull()
-                .first { it is OperationState.Completed
-                    || it is OperationState.Cancelled
-                    || it is OperationState.Error }
+        var result: Result<Unit> = Result.failure(Exception("Operation didn't complete."))
 
-        return when (state) {
-            is OperationState.Completed -> Result.success(Unit)
-            is OperationState.Cancelled -> Result.failure(CancellationException())
-            is OperationState.Error -> Result.failure(Exception(state.message))
-            else -> Result.failure(Exception("Unexpected state"))
-        }
+        val stateFlow = service.operationState.filterNotNull()
+
+        stateFlow.onEach { state ->
+            when (state) {
+                is OperationState.Idle -> {
+                    Log.d(TAG, "Operation state: Idle")
+                }
+                is OperationState.Running -> {
+                    Log.d(TAG, "Operation state: Running - ${state.progress}/${state.total} - ${state.message}")
+                    AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiServiceProgress(state))
+                }
+                is OperationState.Completed -> {
+                    Log.d(TAG, "Operation state: Completed")
+                    AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiServiceCompleted(state))
+                    result = Result.success(Unit)
+                }
+                is OperationState.Cancelled -> {
+                    Log.d(TAG, "Operation state: Cancelled")
+                    AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiServiceCancelled(state))
+                    result = Result.failure(CancellationException())
+                }
+                is OperationState.Error -> {
+                    Log.e(TAG, "Operation state: Error - ${state.message}")
+                    AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiServiceError(state))
+                    result = Result.failure(Exception(state.message))
+                }
+            }
+        }.takeWhile { state ->
+            // The flow continues as long as the state is NOT a final state.
+            !(state is OperationState.Completed || state is OperationState.Cancelled || state is OperationState.Error)
+        }.collect()
+
+        return result
     }
     
     private fun bindService() {
@@ -129,45 +155,9 @@ class AnkiSyncServiceDelegate(
             isBound = false
         }
     }
-
-    private fun observeOperationState() {
-        val lifecycleOwner = ProcessLifecycleOwner.get()
-
-        val delegate = this
-
-        lifecycleOwner.lifecycleScope.launch {
-            lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                val service = serviceDeferred.await()
-                AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiServiceStarting(delegate))
-
-                service.operationState.collect { state ->
-                    when (state) {
-                        is OperationState.Idle -> {
-                            Log.d(TAG, "Operation state: Idle")
-                        }
-                        is OperationState.Running -> {
-                            Log.d(TAG, "Operation state: Running - ${state.progress}/${state.total} - ${state.message}")
-                            AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiServiceProgress(state))
-                        }
-                        is OperationState.Completed -> {
-                            Log.d(TAG, "Operation state: Completed")
-                            AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiServiceCompleted(state))
-                        }
-                        is OperationState.Cancelled -> {
-                            Log.d(TAG, "Operation state: Cancelled")
-                            AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiServiceCancelled(state))
-                        }
-                        is OperationState.Error -> {
-                            Log.e(TAG, "Operation state: Error - ${state.message}")
-                            AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiServiceError(state))
-                        }
-                    }
-                }
-            }
-        }
-    }
     
     fun cleanup() {
         unbindService()
+        service = null
     }
 } 
