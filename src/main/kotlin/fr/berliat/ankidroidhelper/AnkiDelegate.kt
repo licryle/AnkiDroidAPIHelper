@@ -5,20 +5,22 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
 import android.widget.Toast
+
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
+
 import com.ichi2.anki.api.AddContentApi
 import com.ichi2.anki.api.AddContentApi.READ_WRITE_PERMISSION
+
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
 import kotlin.reflect.KClass
 
 /**
@@ -79,14 +81,40 @@ open class AnkiDelegate(
     }
 
     suspend fun delegateToAnki(ankiAction: (suspend () -> Result<Unit>)?) = withContext(Dispatchers.IO) {
-        ankiAction?.let { AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiAction(it)) }
+        ankiAction?.let {
+            val result = safelyModifyAnkiDbIfAllowed {
+                try {
+                    withContext(Dispatchers.IO) {
+                        ankiAction.invoke() // action sync must happen on IO thread.
+                    }
+                } catch (e: Exception) {
+                    Log.e(
+                        TAG,
+                        "Anki operation yielded an Exception." + e.message
+                    )
+                    Result.failure(Exception("Anki Operation Crashed: " + e.message))
+                }
+            }
+
+            result.onSuccess { onAnkiOperationSuccess(context) }
+                .onFailure { e ->
+                    if (e is CancellationException)
+                        onAnkiOperationCancelled(context)
+                    else
+                        onAnkiOperationFailed(context, e)
+                }
+        }
     }
 
     suspend fun delegateToAnkiService(serviceClass: KClass<out AnkiSyncService>) = withContext(Dispatchers.IO) {
         delegateToAnki(suspend {
             val serviceDelegate = AnkiSyncServiceDelegate(context, serviceClass.java)
             serviceDelegate.startSyncToAnkiOperation()
-            serviceDelegate.awaitOperationCompletion()
+            val result = serviceDelegate.awaitOperationCompletion()
+
+            serviceDelegate.cleanup()
+
+            result
         })
     }
 
@@ -150,53 +178,28 @@ open class AnkiDelegate(
     /********** Our main listening loop **********/
     private fun observeUiEvents() {
         lifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
-            lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                AnkiSharedEventBus.uiEvents.collect { event ->
-                    // Launching on the activity to enable to finish so matter the fragment in the background.
-                    activity.lifecycleScope.launch(Dispatchers.Main) {
-                        when (event) {
-                            is AnkiSharedEventBus.UiEvent.AnkiAction -> {
-                                val result = safelyModifyAnkiDbIfAllowed {
-                                    try {
-                                        withContext(Dispatchers.IO) {
-                                            event.action() // action sync must happen on IO thread.
-                                        }
-                                    } catch (e: Exception) {
-                                        Log.e(
-                                            TAG,
-                                            "Anki operation yielded an Exception." + e.message
-                                        )
-                                        Result.failure(Exception("Anki Operation Crashed: " + e.message))
-                                    }
-                                }
+            AnkiSharedEventBus.uiEvents.collect { event ->
+                // Launching on the activity to enable to finish so matter the fragment in the background.
+                activity.lifecycleScope.launch(Dispatchers.Main) {
+                    when (event) {
+                        is AnkiSharedEventBus.UiEvent.AnkiServiceProgress -> {
+                            // Handle progress updates for long operations
+                            Log.d(TAG, "Progress update: ${event.state.progress}/${event.state.total} - ${event.state.message}")
 
-                                result.onSuccess { onAnkiOperationSuccess(context) }
-                                    .onFailure { e ->
-                                        if (e is CancellationException)
-                                            onAnkiOperationCancelled(context)
-                                        else
-                                            onAnkiOperationFailed(context, e)
-                                    }
-                            }
-                            is AnkiSharedEventBus.UiEvent.AnkiServiceProgress -> {
-                                // Handle progress updates for long operations
-                                Log.d(TAG, "Progress update: ${event.state.progress}/${event.state.total} - ${event.state.message}")
-
-                                // Forward progress to registered callback
-                                onAnkiSyncProgress(context, event)
-                            }
-                            is AnkiSharedEventBus.UiEvent.AnkiServiceStarting -> {
-                                onAnkiServiceStarting(context, event.serviceDelegate)
-                            }
-                            is AnkiSharedEventBus.UiEvent.AnkiServiceCancelled -> {
-                                onAnkiOperationCancelled(context)
-                            }
-                            is AnkiSharedEventBus.UiEvent.AnkiServiceError -> {
-                                onAnkiOperationFailed(context, Exception(event.state.message))
-                            }
-                            is AnkiSharedEventBus.UiEvent.AnkiServiceCompleted -> {
-                                onAnkiOperationSuccess(context)
-                            }
+                            // Forward progress to registered callback
+                            onAnkiSyncProgress(context, event)
+                        }
+                        is AnkiSharedEventBus.UiEvent.AnkiServiceStarting -> {
+                            onAnkiServiceStarting(context, event.serviceDelegate)
+                        }
+                        is AnkiSharedEventBus.UiEvent.AnkiServiceCancelled -> {
+                            onAnkiOperationCancelled(context)
+                        }
+                        is AnkiSharedEventBus.UiEvent.AnkiServiceError -> {
+                            onAnkiOperationFailed(context, Exception(event.state.message))
+                        }
+                        is AnkiSharedEventBus.UiEvent.AnkiServiceCompleted -> {
+                            onAnkiOperationSuccess(context)
                         }
                     }
                 }
