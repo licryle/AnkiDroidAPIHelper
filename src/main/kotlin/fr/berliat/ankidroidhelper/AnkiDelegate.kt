@@ -61,7 +61,7 @@ open class AnkiDelegate(
     interface HandlerInterface {
         fun onAnkiOperationSuccess()
         fun onAnkiOperationCancelled()
-        fun onAnkiOperationFailed(e: AnkiOperationsFailures)
+        fun onAnkiOperationFailed(e: Throwable)
         fun onAnkiSyncProgress(current: Int, total: Int, message: String)
         fun onAnkiRequestPermissionGranted()
         fun onAnkiRequestPermissionDenied()
@@ -233,7 +233,7 @@ open class AnkiDelegate(
         }
     }
 
-    protected open suspend fun safelyModifyAnkiDbIfAllowed(ankiDbAction: suspend () -> Result<Unit>): Result<Unit>?
+    protected open suspend fun safelyModifyAnkiDbIfAllowed(ankiDbAction: suspend () -> Result<Unit>): Result<Unit>
         = withContext(Dispatchers.Main) {
         if (!isApiAvailable()) {
             onAnkiNotInstalled()
@@ -247,7 +247,7 @@ open class AnkiDelegate(
             return@withContext Result.failure(AnkiOperationsFailures.AnkiFailure_Deferred)
         }
 
-        return@withContext  safelyModifyAnkiDb(ankiDbAction)
+        return@withContext safelyModifyAnkiDb(ankiDbAction)
     }
 
     protected fun appContextToast(context: Context?, message: String) {
