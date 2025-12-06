@@ -11,7 +11,9 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -21,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Service for handling long operations with progress tracking and cancellation support.
@@ -59,6 +62,8 @@ abstract class AnkiSyncService : LifecycleService() {
     private val binder = LongOperationBinder()
 
     private var notificationManager: NotificationManager? = null
+
+    private val resourcesReady = CompletableDeferred<Unit>()
     
     inner class LongOperationBinder : Binder() {
         fun getService(): AnkiSyncService = this@AnkiSyncService
@@ -67,7 +72,20 @@ abstract class AnkiSyncService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        createNotificationChannel()
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                initResources()
+                withContext(Dispatchers.Main) {
+                    createNotificationChannel()
+                }
+                resourcesReady.complete(Unit)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize resources", e)
+                resourcesReady.completeExceptionally(e)
+                _operationState.value = OperationState.Error("Initialization failed due to initResources crash: " + e.message)
+            }
+        }
     }
 
     override fun onBind(intent: Intent): IBinder {
@@ -119,6 +137,8 @@ abstract class AnkiSyncService : LifecycleService() {
 
     protected abstract suspend fun syncToAnki()
     protected abstract fun getSyncStartMessage() : String
+
+    abstract suspend fun initResources()
     abstract fun getActivityClass(): Class<out Any>
     abstract fun getNotificationTitle(): String
     abstract fun getNotificationLargeIcon(): Bitmap?
@@ -132,6 +152,7 @@ abstract class AnkiSyncService : LifecycleService() {
     private fun startSyncToAnkiOperation(operationData: String?) {
         currentJob = serviceScope.launch(Dispatchers.IO) {
             try {
+                resourcesReady.await()
                 _operationState.value = OperationState.Running(
                     operationType = OPERATION_SYNC_TO_ANKI,
                     progress = 0,
