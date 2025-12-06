@@ -2,6 +2,7 @@ package fr.berliat.ankidroidhelper
 
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
@@ -58,10 +59,9 @@ open class AnkiDelegate(
     private var callbackListener = callbackHandler
 
     interface HandlerInterface {
-        fun onAnkiNotInstalled()
         fun onAnkiOperationSuccess()
         fun onAnkiOperationCancelled()
-        fun onAnkiOperationFailed(e: Throwable)
+        fun onAnkiOperationFailed(e: AnkiOperationsFailures)
         fun onAnkiSyncProgress(current: Int, total: Int, message: String)
         fun onAnkiRequestPermissionGranted()
         fun onAnkiRequestPermissionDenied()
@@ -244,15 +244,19 @@ open class AnkiDelegate(
         if (shouldRequestPermission()) {
             callQueue.add(ankiDbAction)
             requestPermission()
-            return@withContext null
+            return@withContext Result.failure(AnkiOperationsFailures.AnkiFailure_Deferred)
         }
 
-        return@withContext safelyModifyAnkiDb(ankiDbAction)
+        return@withContext  safelyModifyAnkiDb(ankiDbAction)
     }
 
-    protected fun appContextToast(message: String) {
+    protected fun appContextToast(context: Context?, message: String) {
+        if (context == null) {
+            return
+        }
+
         Toast.makeText(
-            appContext,
+            context,
             message,
             Toast.LENGTH_LONG
         ).show()
@@ -275,7 +279,9 @@ open class AnkiDelegate(
         callbackListener?.onAnkiServiceStarting(serviceDelegate)
     }
 
-    protected open fun onAnkiSyncProgress(event: AnkiSharedEventBus.UiEvent.AnkiServiceProgress) {
+    protected open fun onAnkiSyncProgress(context: Context?, event: AnkiSharedEventBus.UiEvent.AnkiServiceProgress) {
+        if (context == null) return
+
         // The service does the notification update
 
         callbackListener?.onAnkiSyncProgress(event.state.progress, event.state.total, event.state.message)
@@ -294,14 +300,12 @@ open class AnkiDelegate(
     }
 
     protected open fun onAnkiNotInstalled() {
-        callbackHandler?.onAnkiNotInstalled()
     }
 
-    sealed class AnkiOperationsFailures(message: String): Throwable(message) {
-        object AnkiFailure_NotInstalled : AnkiOperationsFailures("AnkiNotInstalled")
-        object AnkiFailure_NoPermission : AnkiOperationsFailures("AnkiNoPermission")
-
-        open class CustomError(message: String) : AnkiOperationsFailures(message)
+    sealed class AnkiOperationsFailures: Throwable() {
+        object AnkiFailure_Deferred : AnkiOperationsFailures()
+        object AnkiFailure_NotInstalled : AnkiOperationsFailures()
+        object AnkiFailure_Off : AnkiOperationsFailures()
     }
 
     companion object {
