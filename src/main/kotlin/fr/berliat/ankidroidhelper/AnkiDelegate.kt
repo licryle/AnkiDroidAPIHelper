@@ -8,7 +8,7 @@ import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
-import androidx.fragment.app.Fragment
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.lifecycleScope
@@ -49,7 +49,7 @@ typealias AnkiDelegator = suspend ((suspend () -> Result<Unit>)?) -> Unit
 typealias AnkiServiceDelegator = suspend (serviceClass: KClass<out AnkiSyncService>) -> Unit
 
 open class AnkiDelegate(
-    private val fragment: Fragment, val callbackHandler: HandlerInterface?
+    private val activity: FragmentActivity, val callbackHandler: HandlerInterface?
 ) {
     private var callbackListener = callbackHandler
 
@@ -64,9 +64,8 @@ open class AnkiDelegate(
         fun onAnkiServiceStarting(serviceDelegate: AnkiSyncServiceDelegate)
     }
 
-    private val lifecycleOwner : LifecycleOwner = fragment
-    private val context = fragment.requireContext()
-    private val appContext = context.applicationContext
+    private val lifecycleOwner : LifecycleOwner = activity
+    private val context = activity.applicationContext
     private val callQueue: ArrayDeque<suspend () -> Result<Unit>> = ArrayDeque()
     private lateinit var permissionLauncher: ActivityResultLauncher<Array<String>>
 
@@ -93,7 +92,7 @@ open class AnkiDelegate(
 
     /********** Anki Permissions ************/
     protected fun initPermissionHandling(callback: (Boolean) -> Unit) {
-        permissionLauncher = fragment.registerForActivityResult(
+        permissionLauncher = activity.registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()) { result ->
             callback(result[READ_WRITE_PERMISSION] ?: false)
         }
@@ -154,7 +153,7 @@ open class AnkiDelegate(
             lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 AnkiSharedEventBus.uiEvents.collect { event ->
                     // Launching on the activity to enable to finish so matter the fragment in the background.
-                    fragment.requireActivity().lifecycleScope.launch(Dispatchers.Main) {
+                    activity.lifecycleScope.launch(Dispatchers.Main) {
                         when (event) {
                             is AnkiSharedEventBus.UiEvent.AnkiAction -> {
                                 val result = safelyModifyAnkiDbIfAllowed {
@@ -171,13 +170,12 @@ open class AnkiDelegate(
                                     }
                                 }
 
-                                // Null if result is deferred
-                                result?.onSuccess { onAnkiOperationSuccess() }
-                                    ?.onFailure { e ->
+                                result.onSuccess { onAnkiOperationSuccess(context) }
+                                    .onFailure { e ->
                                         if (e is CancellationException)
-                                            onAnkiOperationCancelled()
+                                            onAnkiOperationCancelled(context)
                                         else
-                                            onAnkiOperationFailed(e)
+                                            onAnkiOperationFailed(context, e)
                                     }
                             }
                             is AnkiSharedEventBus.UiEvent.AnkiServiceProgress -> {
@@ -185,19 +183,19 @@ open class AnkiDelegate(
                                 Log.d(TAG, "Progress update: ${event.state.progress}/${event.state.total} - ${event.state.message}")
 
                                 // Forward progress to registered callback
-                                onAnkiSyncProgress(event)
+                                onAnkiSyncProgress(context, event)
                             }
                             is AnkiSharedEventBus.UiEvent.AnkiServiceStarting -> {
-                                onAnkiServiceStarting(event.serviceDelegate)
+                                onAnkiServiceStarting(context, event.serviceDelegate)
                             }
                             is AnkiSharedEventBus.UiEvent.AnkiServiceCancelled -> {
-                                onAnkiOperationCancelled()
+                                onAnkiOperationCancelled(context)
                             }
                             is AnkiSharedEventBus.UiEvent.AnkiServiceError -> {
-                                onAnkiOperationFailed(Exception(event.state.message))
+                                onAnkiOperationFailed(context, Exception(event.state.message))
                             }
                             is AnkiSharedEventBus.UiEvent.AnkiServiceCompleted -> {
-                                onAnkiOperationSuccess()
+                                onAnkiOperationSuccess(context)
                             }
                         }
                     }
