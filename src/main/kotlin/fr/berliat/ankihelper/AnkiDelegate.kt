@@ -1,5 +1,6 @@
 package fr.berliat.ankidroidhelper
 
+import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -19,6 +20,7 @@ import com.ichi2.anki.api.AddContentApi.READ_WRITE_PERMISSION
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -154,7 +156,7 @@ open class AnkiDelegate(
     /********* Checking Anki's Running & Installed **********/
     protected open suspend fun ensureAnkiDroidIsRunning() {
         withContext(Dispatchers.Main) {
-            startAnkiDroid()
+            if (!isAnkiRunning()) startAnkiDroid()
         }
     }
 
@@ -162,17 +164,34 @@ open class AnkiDelegate(
         return AddContentApi.getAnkiDroidPackageName(context) != null
     }
 
-    protected open fun startAnkiDroid(): Boolean {
-        val intent = Intent(Intent.ACTION_MAIN)
-        intent.setClassName("com.ichi2.anki", "com.ichi2.anki.IntentHandler")
+    protected open suspend fun startAnkiDroid(): Boolean {
+        // Necessary, based on https://github.com/ankidroid/Anki-Android/issues/18286
+        val intent = Intent().apply {
+            action = AddContentApi.getAnkiDroidPackageName(activity) + ".DO_SYNC"
+            addCategory(Intent.CATEGORY_DEFAULT)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
 
         return try {
             context.startActivity(intent)
-            true
+
+            repeat(10) {
+                if (isAnkiRunning()) return true
+                    else Log.e("hello", "hell")
+
+                delay(100)
+            }
+
+            throw Exception("Couldn't start Anki in 0.5 second")
         } catch (e: ActivityNotFoundException) {
             Log.e(TAG, "Anki is not installed, cannot start: $e")
             false
         }
+    }
+
+    @SuppressLint("ServiceCast")
+    private fun isAnkiRunning(): Boolean {
+        return AddContentApi(context).deckList != null
     }
 
     /********** Our main listening loop **********/
