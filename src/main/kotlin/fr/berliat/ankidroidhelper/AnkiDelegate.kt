@@ -46,10 +46,12 @@ import kotlin.reflect.KClass
  * element you change/delete.
  */
 typealias AnkiDelegator = suspend ((suspend () -> Result<Unit>)?) -> Unit
+typealias AnkiServiceDelegator = suspend (serviceClass: KClass<out AnkiSyncService>) -> Unit
 
 open class AnkiDelegate(
-    private val fragment: Fragment, private val callbackHandler: HandlerInterface?
+    private val fragment: Fragment, val callbackHandler: HandlerInterface?
 ) {
+    private var callbackListener = callbackHandler
 
     interface HandlerInterface {
         fun onAnkiNotInstalled()
@@ -73,11 +75,15 @@ open class AnkiDelegate(
         observeUiEvents()
     }
 
+    fun replaceListener(callbackHandler: HandlerInterface) {
+        callbackListener = callbackHandler
+    }
+
     suspend fun delegateToAnki(ankiAction: (suspend () -> Result<Unit>)?) = withContext(Dispatchers.IO) {
         ankiAction?.let { AnkiSharedEventBus.emit(AnkiSharedEventBus.UiEvent.AnkiAction(it)) }
     }
 
-    suspend fun delegateToAnki(serviceClass: KClass<out AnkiSyncService>) = withContext(Dispatchers.IO) {
+    suspend fun delegateToAnkiService(serviceClass: KClass<out AnkiSyncService>) = withContext(Dispatchers.IO) {
         delegateToAnki(suspend {
             val serviceDelegate = AnkiSyncServiceDelegate(context, serviceClass.java)
             serviceDelegate.startSyncToAnkiOperation()
@@ -106,7 +112,7 @@ open class AnkiDelegate(
         Log.i(TAG, "AnkiPermissions to read/write is granted? $granted")
 
         if (granted) {
-            callbackHandler?.onAnkiRequestPermissionGranted()
+            callbackListener?.onAnkiRequestPermissionGranted()
             while (callQueue.isNotEmpty()) {
                 val action = callQueue.removeFirst()
                 lifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
@@ -114,8 +120,7 @@ open class AnkiDelegate(
                 }
             }
         } else {
-            callbackHandler?.onAnkiRequestPermissionDenied()
-            callbackHandler?.onAnkiOperationFailed(AnkiOperationsFailures.AnkiFailure_NoPermission)
+            callbackListener?.onAnkiRequestPermissionDenied()
         }
     }
 
@@ -154,7 +159,9 @@ open class AnkiDelegate(
                             is AnkiSharedEventBus.UiEvent.AnkiAction -> {
                                 val result = safelyModifyAnkiDbIfAllowed {
                                     try {
-                                        event.action() // action sync must happen on IO thread.
+                                        withContext(Dispatchers.IO) {
+                                            event.action() // action sync must happen on IO thread.
+                                        }
                                     } catch (e: Exception) {
                                         Log.e(
                                             TAG,
@@ -232,25 +239,38 @@ open class AnkiDelegate(
     }
 
     /*********** CallBacks ***********/
-    protected open fun onAnkiOperationFailed(e: Throwable) {
-        callbackHandler?.onAnkiOperationFailed(e)
+    protected open fun onAnkiOperationFailed(context: Context?, e: Throwable) {
+        if (e is AnkiOperationsFailures.AnkiFailure_Deferred
+            || e is AnkiOperationsFailures.AnkiFailure_Off
+            || context == null
+        )
+            return
+
+        callbackListener?.onAnkiOperationFailed(e)
     }
 
-    protected open fun onAnkiServiceStarting(serviceDelegate: AnkiSyncServiceDelegate) {
-        callbackHandler?.onAnkiServiceStarting(serviceDelegate)
+    protected open fun onAnkiServiceStarting(context: Context?, serviceDelegate: AnkiSyncServiceDelegate) {
+        if (context == null) return
+
+        callbackListener?.onAnkiServiceStarting(serviceDelegate)
     }
 
     protected open fun onAnkiSyncProgress(event: AnkiSharedEventBus.UiEvent.AnkiServiceProgress) {
         // The service does the notification update
-        callbackHandler?.onAnkiSyncProgress(event.state.progress, event.state.total, event.state.message)
+
+        callbackListener?.onAnkiSyncProgress(event.state.progress, event.state.total, event.state.message)
     }
 
-    protected open fun onAnkiOperationSuccess() {
-        callbackHandler?.onAnkiOperationSuccess()
+    protected open fun onAnkiOperationSuccess(context: Context?) {
+        if (context == null) return
+
+        callbackListener?.onAnkiOperationSuccess()
     }
 
-    protected open fun onAnkiOperationCancelled() {
-        callbackHandler?.onAnkiOperationCancelled()
+    protected open fun onAnkiOperationCancelled(context: Context?) {
+        if (context == null) return
+
+        callbackListener?.onAnkiOperationCancelled()
     }
 
     protected open fun onAnkiNotInstalled() {
