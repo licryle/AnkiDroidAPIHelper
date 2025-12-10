@@ -177,7 +177,6 @@ open class AnkiDelegate(
 
             repeat(10) {
                 if (isAnkiRunning()) return true
-                    else Log.e("hello", "hell")
 
                 delay(100)
             }
@@ -233,21 +232,20 @@ open class AnkiDelegate(
         }
     }
 
-    protected open suspend fun safelyModifyAnkiDbIfAllowed(ankiDbAction: suspend () -> Result<Unit>): Result<Unit>
-        = withContext(Dispatchers.Main) {
+    protected open suspend fun safelyModifyAnkiDbIfAllowed(ankiDbAction: suspend () -> Result<Unit>): Result<Unit> {
         if (!isApiAvailable()) {
             onAnkiNotInstalled()
 
-            return@withContext Result.failure(AnkiOperationsFailures.AnkiFailure_NotInstalled)
+            return Result.failure(AnkiOperationsFailures.AnkiFailure_NotInstalled)
         }
 
         if (shouldRequestPermission()) {
             callQueue.add(ankiDbAction)
             requestPermission()
-            return@withContext Result.failure(AnkiOperationsFailures.AnkiFailure_Deferred)
+            return Result.failure(AnkiOperationsFailures.AnkiFailure_Deferred)
         }
 
-        return@withContext safelyModifyAnkiDb(ankiDbAction)
+        return safelyModifyAnkiDb(ankiDbAction)
     }
 
     protected fun appContextToast(context: Context?, message: String) {
