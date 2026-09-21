@@ -162,8 +162,12 @@ abstract class AnkiSyncService : LifecycleService() {
                 )
                 
                 // Start foreground service with notification
-                startForeground(NOTIFICATION_ID,
-                    createNotification(0, 0, 0, getSyncStartMessage()))
+                val notification = createNotification(0, 0, 0, getSyncStartMessage())
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                } else {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
 
                 syncToAnki()
 
