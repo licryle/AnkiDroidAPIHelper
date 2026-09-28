@@ -17,19 +17,23 @@ AnkiDroidAPIHelper handles for you:
 ## How to use?
 Instead of focusing on the E2E flow, you set it up and focus on call backs provided.
 
-### Create an AnkiDelegate on Fragment creation
-The 2 parameters for `AnkiDelegate` are a Fragment and a callbackHandler implementing `AnkiDelete.HandlerInterface`
-which can be one and the same:
+### Create an AnkiDelegate with a Context, attach the Activity on creation
+`AnkiDelegate` takes a Context (the application context is kept, never the
+Activity) and a callbackHandler implementing `AnkiDelegate.HandlerInterface`.
+Construct it anywhere, then call `attachActivity()` from your Activity's
+`onCreate` (before STARTED) so it can register its permission launcher.
+Re-attach after activity recreation:
 ```
 import fr.berliat.ankidroidhelper.AnkiDelegate
 
-class MyFragment : Fragment(), AnkiDelegate.HandlerInterface {
+class MainActivity : FragmentActivity(), AnkiDelegate.HandlerInterface {
     private lateinit var ankiDelegate: AnkiDelegate
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
- 
-        ankiDelegate = AnkiDelegate(this, this)
+
+        ankiDelegate = AnkiDelegate(applicationContext, this)
+        ankiDelegate.attachActivity(this)
     }
 
     override fun onAnkiOperationSuccess() {}
@@ -41,6 +45,10 @@ class MyFragment : Fragment(), AnkiDelegate.HandlerInterface {
     override fun onAnkiServiceStarting(serviceDelegate: AnkiSyncServiceDelegate) {}
 }
 ```
+
+Calling an Anki operation before `attachActivity()` fails loudly, asking for
+the attach. `destroy()` cancels event observation when you are done with
+the delegate.
 
 ### Call 'delegateToAnki' with short operations
 Upon the call, the AnkiDelegate will do all checks and balances, and call the corresponding callbacks.
@@ -62,7 +70,7 @@ change/delete.
 
 #### Tip 2
 If you use a viewModel, make sure to only pass the ankiDelegate::delegateToAnki method to not create memory leaks.
-AnkiDelegate does reference a fragment after all. That function has a helper signature typealias called "AnkiDelegator".
+The delegate itself only holds the application context, so it is safe to keep as a singleton. That function has a helper signature typealias called "AnkiDelegator".
 ```
 class CardViewModel(val dao: cardDAO, val ankiCaller: AnkiDelegator) { }
 ```

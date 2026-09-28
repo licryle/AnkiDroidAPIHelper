@@ -12,14 +12,15 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.lifecycleScope
 
 import com.ichi2.anki.api.AddContentApi
 import com.ichi2.anki.api.AddContentApi.READ_WRITE_PERMISSION
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -39,13 +40,14 @@ import kotlin.reflect.KClass
  *     override fun onCreate(savedInstanceState: Bundle?) {
  *         super.onCreate(savedInstanceState)
  *
- *         ankiDelegate = AnkiDelegate(this)
+ *         ankiDelegate = AnkiDelegate(applicationContext)
+ *         ankiDelegate.attachActivity(this)
  *         ankiDelegate.delegateToAnki(WordListRepo.insertWordToList(list, word))
  *     }
  *
  * If you use a viewModel, make sure to only pass the ankiDelegate::delegateToAnki method to not
- * create memory leaks. AnkiDelegate does reference a fragment after all. That function has a helper
- * signature typealias called "AnkiDelegator".
+ * create memory leaks. AnkiDelegate only holds the application context plus a permission
+ * launcher bound to the attached activity (re-attach after recreation).
  *
  * Beware of execution patterns, as the callbacks can mean Anki calls executing after whatever
  * element you change/delete.
@@ -54,7 +56,7 @@ typealias AnkiDelegator = suspend ((suspend () -> Result<Unit>)?) -> Unit
 typealias AnkiServiceDelegator = suspend (serviceClass: KClass<out AnkiSyncService>) -> Unit
 
 open class AnkiDelegate(
-    private val activity: FragmentActivity, val callbackHandler: HandlerInterface?
+    context: Context, val callbackHandler: HandlerInterface?
 ) {
     private var callbackListener = callbackHandler
 
@@ -68,14 +70,29 @@ open class AnkiDelegate(
         fun onAnkiServiceStarting(serviceDelegate: AnkiSyncServiceDelegate)
     }
 
-    private val lifecycleOwner : LifecycleOwner = activity
-    private val context = activity.applicationContext
+    private val context = context.applicationContext
+    private val delegateScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val callQueue: ArrayDeque<suspend () -> Result<Unit>> = ArrayDeque()
-    private lateinit var permissionLauncher: ActivityResultLauncher<Array<String>>
+    private var permissionLauncher: ActivityResultLauncher<Array<String>>? = null
 
     init {
-        initPermissionHandling { isGranted -> onAnkiRequestPermissionsResult(isGranted) }
         observeUiEvents()
+    }
+
+    /**
+     * Binds the Anki permission launcher. Must be called from Activity.onCreate
+     * (before STARTED). Call again after activity recreation.
+     */
+    fun attachActivity(activity: FragmentActivity) {
+        permissionLauncher = activity.registerForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()) { result ->
+            onAnkiRequestPermissionsResult(result[READ_WRITE_PERMISSION] ?: false)
+        }
+    }
+
+    /** Cancels event observation. The delegate holds no activity reference. */
+    open fun destroy() {
+        delegateScope.cancel()
     }
 
     fun replaceListener(callbackHandler: HandlerInterface) {
@@ -121,15 +138,11 @@ open class AnkiDelegate(
     }
 
     /********** Anki Permissions ************/
-    protected fun initPermissionHandling(callback: (Boolean) -> Unit) {
-        permissionLauncher = activity.registerForActivityResult(
-            ActivityResultContracts.RequestMultiplePermissions()) { result ->
-            callback(result[READ_WRITE_PERMISSION] ?: false)
-        }
-    }
-
     protected fun requestPermission() {
-        permissionLauncher.launch(arrayOf(READ_WRITE_PERMISSION))
+        val launcher = checkNotNull(permissionLauncher) {
+            "AnkiDelegate.attachActivity() must be called from Activity.onCreate before any Anki operation"
+        }
+        launcher.launch(arrayOf(READ_WRITE_PERMISSION))
     }
 
     protected fun shouldRequestPermission(): Boolean {
@@ -144,7 +157,7 @@ open class AnkiDelegate(
             callbackListener?.onAnkiRequestPermissionGranted()
             while (callQueue.isNotEmpty()) {
                 val action = callQueue.removeFirst()
-                lifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+                delegateScope.launch(Dispatchers.IO) {
                     safelyModifyAnkiDb { action() }
                 }
             }
@@ -167,7 +180,7 @@ open class AnkiDelegate(
     protected open suspend fun startAnkiDroid(): Boolean {
         // Necessary, based on https://github.com/ankidroid/Anki-Android/issues/18286
         val intent = Intent().apply {
-            action = AddContentApi.getAnkiDroidPackageName(activity) + ".DO_SYNC"
+            action = AddContentApi.getAnkiDroidPackageName(context) + ".DO_SYNC"
             addCategory(Intent.CATEGORY_DEFAULT)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
@@ -195,10 +208,9 @@ open class AnkiDelegate(
 
     /********** Our main listening loop **********/
     private fun observeUiEvents() {
-        lifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+        delegateScope.launch(Dispatchers.IO) {
             AnkiSharedEventBus.uiEvents.collect { event ->
-                // Launching on the activity to enable to finish so matter the fragment in the background.
-                activity.lifecycleScope.launch(Dispatchers.Main) {
+                delegateScope.launch(Dispatchers.Main) {
                     when (event) {
                         is AnkiSharedEventBus.UiEvent.AnkiServiceProgress -> {
                             // Handle progress updates for long operations
